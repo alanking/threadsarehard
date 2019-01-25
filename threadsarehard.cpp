@@ -21,24 +21,24 @@ std::mutex threads_available_m;
 std::condition_variable ta_cv;
 
 void task(int i) {
-    // Make parent aware of existence
+    // I exist!
     {
         std::unique_lock<std::mutex> l(m);
     }
     cv.notify_all();
 
     while(true) {
-        // Acquire blackboard lock and wait for this thread's row to be set to running
+        // Wait for someone to say go
         std::unique_lock<std::mutex> l(m);
         auto& ts = structs[i];
         //std::cout << std::this_thread::get_id() << " watching ts..." << &ts << std::endl;
         work_cv.wait(l, [&]{/*std::cout << std::this_thread::get_id() << "..." << ts.running << std::endl;*/ return ts.running;});
 
-        // Actual "task"
+        // The actual task
         std::cout << &ts << ".my_string:" << ts.my_string << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-        // Become available and notify
+        // I'm done!
         ts = thread_struct{};
         {
             //std::cout << std::this_thread::get_id() << " available now" << std::endl;
@@ -52,7 +52,9 @@ void task(int i) {
 int main() {
     const int thread_count{5};
     std::vector<std::thread> threads;
-    structs.reserve(thread_count); // HACK(?)
+    structs.reserve(thread_count); // HACK(?) - vector growth moves the address of the shmem
+
+    // Spawn some threads
     for (int i{}; i < thread_count; i++) {
         structs.emplace_back(thread_struct{});
         std::thread t{task, i};
@@ -63,6 +65,8 @@ int main() {
         }
         //std::cout << "Created " << threads[i].get_id() << " with " << &structs[i] << std::endl;
     }
+
+    // Set thread availability to true
     {
         std::unique_lock<std::mutex> l(threads_available_m);
         threads_available = true;
@@ -96,17 +100,17 @@ int main() {
                     }
                 }
                 if (!sent) {
-                    // Make sure nobody is waiting on a signal
+                    // The blackboard is full - notify the workers
                     //std::cout << "notify workers and wait for thread availablity" << std::endl;
-                    //work_cv.notify_all();
+                    l.unlock();
                     work_cv.notify_all();
                     {
                         //std::cout << s << " not sent, no threads available" << std::endl;
                         std::unique_lock<std::mutex> ta_l(threads_available_m);
                         threads_available = false;
                     }
-                    l.unlock();
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    // This sleep is causing the work to be distributed properly, so more locking may be needed somewhere
+                    //std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
             }
         }
